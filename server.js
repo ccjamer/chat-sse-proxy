@@ -14,7 +14,8 @@ const pool = new pg.Pool({
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 app.post('/api/chat/stream', async (req, res) => {
-  const { clientId, message, history = [] } = req.body;
+  const clientId = req.body.clientId || req.body.client_id;
+  const { message, history = [] } = req.body
 
   try {
     const clientRes = await pool.query(
