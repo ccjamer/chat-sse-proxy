@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import pg from 'pg';
-import OpenAI from 'openai';
 
 const app = express();
 app.use(express.static('.'));
@@ -12,11 +11,9 @@ const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL
 });
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
 app.post('/api/chat/stream', async (req, res) => {
   const clientId = req.body.clientId || req.body.client_id;
-  const { message, history = [] } = req.body
+  const { message, history = [] } = req.body;
 
   try {
     const clientRes = await pool.query(
@@ -34,41 +31,30 @@ app.post('/api/chat/stream', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    const stream = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: `Du er en assistent for ${clientConfig.title}.` },
-        ...history,
-        { role: 'user', content: message }
-      ],
-      stream: true,
+    // Sender forespørgslen direkte til n8n, som nu styrer AI'en og prompten
+    const n8nResponse = await fetch(clientConfig.n8n_endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientId,
+        message,
+        history
+      })
     });
 
-    let fullAnswer = '';
-
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      if (content) {
-        fullAnswer += content;
-        res.write(`data: ${JSON.stringify({ text: content })}\n\n`);
-      }
+    if (!n8nResponse.ok) {
+      throw new Error(`n8n svarede med status ${n8nResponse.status}`);
     }
 
-    res.write('data: [DONE]\n\n');
+    // Videresender streamet direkte fra n8n til browser-widgetten
+    const reader = n8nResponse.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      res.write(value);
+    }
+
     res.end();
-
-    if (clientConfig.n8n_endpoint) {
-      fetch(clientConfig.n8n_endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          clientId,
-          userMessage: message,
-          aiResponse: fullAnswer,
-          timestamp: new Date().toISOString()
-        })
-      }).catch(err => console.error('Baggrunds-n8n fejl:', err));
-    }
 
   } catch (error) {
     console.error('Stream fejl:', error);
