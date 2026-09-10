@@ -355,12 +355,20 @@
       menu.style.display = 'none';
     });
 
+    // Hjælpefunktion til at konvertere Markdown til ren HTML
+    const parseMarkdown = (text) => {
+      return text
+        .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
+        .replace(/\*(.*?)\*/g, '<i>$1</i>')
+        .replace(/\n/g, '<br>');
+    };
+
     const appendMessage = (text, type) => {
       const div = document.createElement('div');
       const id = 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5);
       div.id = id;
       div.className = `cb-bubble ${type}`;
-      div.innerText = text;
+      div.innerHTML = type === 'bot' ? parseMarkdown(text) : text;
       messagesContainer.appendChild(div);
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
       return id;
@@ -391,6 +399,7 @@
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
+        let fullBotMessage = '';
 
         while (true) {
           const { done, value } = await reader.read();
@@ -407,7 +416,8 @@
               try {
                 const parsed = JSON.parse(data);
                 if (parsed.text) {
-                  botMsgEl.innerText += parsed.text;
+                  fullBotMessage += parsed.text;
+                  botMsgEl.innerHTML = parseMarkdown(fullBotMessage);
                   messagesContainer.scrollTop = messagesContainer.scrollHeight;
                 }
               } catch (e) {}
