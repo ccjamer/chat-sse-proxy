@@ -36,7 +36,7 @@ app.post('/api/chat/stream', async (req, res) => {
     }
 
     const clientConfig = clientRes.rows[0];
-    const systemPrompt = clientConfig.system_prompt || `Du er en imødekommende assistent for ${clientConfig.company_name || 'virksomheden'}.`;
+    const baseSystemPrompt = clientConfig.system_prompt || `Du er en imødekommende assistent for ${clientConfig.company_name || 'virksomheden'}.`;
 
     // 2. Hent de seneste 10 beskeder fra historikken for denne session
     const historyRes = await pool.query(
@@ -55,16 +55,48 @@ app.post('/api/chat/stream', async (req, res) => {
       [clientId, activeSessionId, 'user', message]
     );
 
-    // Sæt SSE headers
+    // 4. PGVECTOR VEKTORSØGNING: Hent relevant viden for den specifikke klient
+    let contextText = '';
+    try {
+      // Lav embedding af brugerens besked
+      const embeddingRes = await openai.embeddings.create({
+        model: 'text-embedding-3-small',
+        input: message,
+      });
+      const userVector = embeddingRes.data[0].embedding;
+
+      // Søg kun i viden tilhørende denne clientId (Namespace-sikring)
+      const knowledgeRes = await pool.query(
+        `SELECT content 
+         FROM chat_knowledge 
+         WHERE client_id = $1 
+         ORDER BY embedding <=> $2::vector 
+         LIMIT 3`,
+        [clientId, JSON.stringify(userVector)]
+      );
+
+      if (knowledgeRes.rows.length > 0) {
+        contextText = knowledgeRes.rows.map(row => row.content).join('\n---\n');
+      }
+    } catch (vectorErr) {
+      console.warn('Vektorsøgning sprunget over eller fejlet:', vectorErr.message);
+    }
+
+    // Sammensæt den endelige system prompt med viden hvis fundet
+    const finalSystemPrompt = contextText 
+      ? `${baseSystemPrompt}\n\nBrug følgende relevante information om virksomheden til at besvare brugerens spørgsmål præcist:\n${contextText}`
+      : baseSystemPrompt;
+
+    // Sæt SSE headers til streaming
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    // 4. Kald OpenAI med System Prompt + DB-historik + Ny Besked
+    // 5. Kald OpenAI med opdateret Prompt + Historik + Ny Besked
     const stream = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: finalSystemPrompt },
         ...dbHistory,
         { role: 'user', content: message }
       ],
@@ -84,7 +116,7 @@ app.post('/api/chat/stream', async (req, res) => {
     res.write('data: [DONE]\n\n');
     res.end();
 
-    // 5. Gem AI'ens samlede svar i databasen bagefter
+    // 6. Gem AI'ens samlede svar i databasen bagefter
     if (fullAnswer) {
       await pool.query(
         `INSERT INTO chat_conversations (client_id, session_id, role, message) 
@@ -93,7 +125,7 @@ app.post('/api/chat/stream', async (req, res) => {
       );
     }
 
-    // 6. Baggrunds-logging til n8n (hvis konfigureret)
+    // 7. Baggrunds-logging til n8n (hvis konfigureret)
     if (clientConfig.n8n_chat_endpoint || clientConfig.n8n_endpoint) {
       const targetEndpoint = clientConfig.n8n_chat_endpoint || clientConfig.n8n_endpoint;
       fetch(targetEndpoint, {
