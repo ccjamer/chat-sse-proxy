@@ -8,6 +8,7 @@
   }
 
   try {
+    // Dynamiske variabler (trækkes direkte eller sættes til standard)
     const brandColor = '#d4af37';
     const logoUrl = '';
     const titleText = 'Astraea Orakel';
@@ -196,7 +197,7 @@
         margin-bottom: 8px;
       }
 
-      .cb-gdpr a { color: var(--unikiq-brand); text-decoration: underline; }
+      .cb-gdpr a { color: var(--unikiq-brand); text-decoration: underline; cursor: pointer; }
       .cb-gdpr-close { background: none; border: none; cursor: pointer; color: var(--unikiq-muted); font-size: 14px; }
 
       .cb-input-box {
@@ -289,7 +290,7 @@
 
         <div class="cb-footer">
           <div class="cb-gdpr" id="cb-gdpr">
-            <span>Ved at chatte accepterer du vores <a href="https://unikiq.dk/privacy" target="_blank">privatlivspolitik</a>.</span>
+            <span>Ved at chatte accepterer du vores <a id="cb-privacy-link">privatlivspolitik</a>.</span>
             <button class="cb-gdpr-close" id="cb-gdpr-close">&times;</button>
           </div>
 
@@ -314,6 +315,18 @@
             Powered by <a href="https://unikiq.dk" target="_blank">UnikIQ</a>
           </div>
         </div>
+
+        <!-- AI PRIVATLIVS POP-UP MODAL -->
+        <div id="cb-privacy-modal" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); backdrop-filter:blur(3px); z-index:200; align-items:center; justify-content:center; padding:16px;">
+          <div style="background:white; border-radius:16px; padding:20px; max-height:90%; overflow-y:auto; font-size:12px; color:#18181B; line-height:1.5; box-shadow:0 10px 25px rgba(0,0,0,0.2);">
+            <h4 style="font-size:14px; margin-bottom:8px; color:#0f172a; font-weight:700;">AI-Information & Privatliv</h4>
+            <p style="margin-bottom:8px;"><strong>1. Automatiseret AI:</strong> Du chatter med en kunstig intelligens (AI-assistent). Svar er vejledende.</p>
+            <p style="margin-bottom:8px;"><strong>2. Databehandling:</strong> Din samtale logges midlertidigt for at besvare dine henvendelser og give dig den bedste support.</p>
+            <p style="margin-bottom:12px;"><strong>3. Sikkerhed & GDPR:</strong> Dine oplysninger behandles fortroligt og sælges/deles aldrig. Data anvendes ikke til at træne offentlige AI-modeller.</p>
+            <button id="cb-close-privacy-modal" style="width:100%; background:var(--unikiq-brand); color:white; border:none; padding:8px; border-radius:8px; cursor:pointer; font-weight:600;">Forstået</button>
+          </div>
+        </div>
+
       </div>
     `;
     document.body.appendChild(widgetWrapper);
@@ -333,6 +346,11 @@
     const fileBtn = document.getElementById('cb-file-btn');
     const fileInput = document.getElementById('cb-file-input');
 
+    // Pop-up modal elementer
+    const privacyLink = document.getElementById('cb-privacy-link');
+    const privacyModal = document.getElementById('cb-privacy-modal');
+    const closePrivacyModal = document.getElementById('cb-close-privacy-modal');
+
     const toggleWidget = () => {
       const isOpen = widget.style.display === 'flex';
       widget.style.display = isOpen ? 'none' : 'flex';
@@ -347,6 +365,16 @@
 
     gdprClose.addEventListener('click', () => {
       gdprBanner.style.display = 'none';
+    });
+
+    // Eventlyttere til privatlivs-pop-up
+    privacyLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      privacyModal.style.display = 'flex';
+    });
+
+    closePrivacyModal.addEventListener('click', () => {
+      privacyModal.style.display = 'none';
     });
 
     resetBtn.addEventListener('click', () => {
