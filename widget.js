@@ -8,7 +8,7 @@
   }
 
   try {
-    // 1. Hent den specifikke klients konfiguration dynamisk fra PostgreSQL via n8n
+    // 1. Hent klients konfiguration fra n8n / PostgreSQL
     let config = {};
     try {
       const configRes = await fetch('https://n8n.unikiq.dk/webhook/get-config?client_id=' + clientId);
@@ -19,20 +19,22 @@
       console.warn('Unikiq Widget: Kunne ikke hente klient-config, bruger standardværdier.', e);
     }
 
-    // Stop afvikling hvis klienten er markeret inaktiv i databasen
     if (config.active === false) {
       console.warn('Unikiq Widget: Klient er inaktiv.');
       return;
     }
 
-    // Dynamiske variabler med faste fallbacks ifald et felt mangler i databasen
     const brandColor = config.brand_color || '#2563eb';
     const logoUrl = config.logo_url || '';
     const titleText = config.title || 'UnikIQ AI Assistent';
     const welcomeMsg = config.welcome_msg || 'Hej! 👋 Hvad kan vi hjælpe dig med i dag?';
 
-    let sessionId = localStorage.getItem('unikiq_session_' + clientId) || 'session_' + Math.random().toString(36).substring(2, 9);
-    localStorage.setItem('unikiq_session_' + clientId, sessionId);
+    // Sikr unikt Session ID pr. klient
+    let sessionId = localStorage.getItem('unikiq_session_' + clientId);
+    if (!sessionId) {
+      sessionId = 'session_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now();
+      localStorage.setItem('unikiq_session_' + clientId, sessionId);
+    }
 
     const style = document.createElement('style');
     style.innerHTML = `
@@ -333,7 +335,6 @@
           </div>
         </div>
 
-        <!-- AI PRIVATLIVS POP-UP MODAL -->
         <div id="cb-privacy-modal" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); backdrop-filter:blur(3px); z-index:200; align-items:center; justify-content:center; padding:16px;">
           <div style="background:white; border-radius:16px; padding:20px; max-height:90%; overflow-y:auto; font-size:12px; color:#18181B; line-height:1.5; box-shadow:0 10px 25px rgba(0,0,0,0.2);">
             <h4 style="font-size:14px; margin-bottom:8px; color:#0f172a; font-weight:700;">AI-Information & Privatliv</h4>
@@ -363,7 +364,6 @@
     const fileBtn = document.getElementById('cb-file-btn');
     const fileInput = document.getElementById('cb-file-input');
 
-    // Pop-up modal elementer
     const privacyLink = document.getElementById('cb-privacy-link');
     const privacyModal = document.getElementById('cb-privacy-modal');
     const closePrivacyModal = document.getElementById('cb-close-privacy-modal');
@@ -384,7 +384,6 @@
       gdprBanner.style.display = 'none';
     });
 
-    // Eventlyttere til privatlivs-pop-up
     privacyLink.addEventListener('click', (e) => {
       e.preventDefault();
       privacyModal.style.display = 'flex';
@@ -394,13 +393,14 @@
       privacyModal.style.display = 'none';
     });
 
+    // Start ny chat: Generer nyt session ID
     resetBtn.addEventListener('click', () => {
-      localStorage.removeItem('unikiq_session_' + clientId);
+      sessionId = 'session_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now();
+      localStorage.setItem('unikiq_session_' + clientId, sessionId);
       messagesContainer.innerHTML = `<div class="cb-bubble bot">${welcomeMsg}</div>`;
       menu.style.display = 'none';
     });
 
-    // Hjælpefunktion til at konvertere Markdown til ren HTML
     const parseMarkdown = (text) => {
       return text
         .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
@@ -435,8 +435,8 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             clientId: clientId,
-            message: text,
-            history: []
+            sessionId: sessionId, // <--- OPDATERET: SENDER DET UNIKKE SESSION ID
+            message: text
           })
         });
 
