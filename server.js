@@ -14,6 +14,17 @@ const pool = new pg.Pool({
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// Hjælpefunktion til Cosine Similarity
+function cosineSimilarity(a, b) {
+  let dotProduct = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
 app.post('/api/chat/stream', async (req, res) => {
   const clientId = req.body.clientId || req.body.client_id;
   const { message, sessionId } = req.body;
@@ -38,7 +49,7 @@ app.post('/api/chat/stream', async (req, res) => {
     const clientConfig = clientRes.rows[0];
     const baseSystemPrompt = clientConfig.system_prompt || `Du er en imødekommende assistent for ${clientConfig.company_name || 'virksomheden'}.`;
 
-    // 2. Hent de seneste 10 beskeder fra historikken for denne session
+    // 2. Hent de seneste 10 beskeder fra samtalehistorikken
     const historyRes = await pool.query(
       `SELECT role, message AS content 
        FROM chat_conversations 
@@ -55,44 +66,48 @@ app.post('/api/chat/stream', async (req, res) => {
       [clientId, activeSessionId, 'user', message]
     );
 
-    // 4. PGVECTOR VEKTORSØGNING: Hent relevant viden for den specifikke klient
+    // 4. VEKTORSØGNING I DATABASE (FLOAT8[] Array)
     let contextText = '';
     try {
-      // Lav embedding af brugerens besked
       const embeddingRes = await openai.embeddings.create({
         model: 'text-embedding-3-small',
         input: message,
       });
       const userVector = embeddingRes.data[0].embedding;
 
-      // Søg kun i viden tilhørende denne clientId (Namespace-sikring)
+      // Hent alle knowledge chunks for den specifikke klient
       const knowledgeRes = await pool.query(
-        `SELECT content 
-         FROM chat_knowledge 
-         WHERE client_id = $1 
-         ORDER BY embedding <=> $2::vector 
-         LIMIT 3`,
-        [clientId, JSON.stringify(userVector)]
+        'SELECT content, embedding FROM chat_knowledge WHERE client_id = $1',
+        [clientId]
       );
 
       if (knowledgeRes.rows.length > 0) {
-        contextText = knowledgeRes.rows.map(row => row.content).join('\n---\n');
+        // Beregn similarity score for hver chunk
+        const scoredChunks = knowledgeRes.rows.map(row => ({
+          content: row.content,
+          score: cosineSimilarity(userVector, row.embedding)
+        }));
+
+        // Sorter efter højeste score
+        scoredChunks.sort((a, b) => b.score - a.score);
+
+        // Vælg de 3 mest relevante chunks
+        contextText = scoredChunks.slice(0, 3).map(c => c.content).join('\n---\n');
       }
     } catch (vectorErr) {
       console.warn('Vektorsøgning sprunget over eller fejlet:', vectorErr.message);
     }
 
-    // Sammensæt den endelige system prompt med viden hvis fundet
     const finalSystemPrompt = contextText 
       ? `${baseSystemPrompt}\n\nBrug følgende relevante information om virksomheden til at besvare brugerens spørgsmål præcist:\n${contextText}`
       : baseSystemPrompt;
 
-    // Sæt SSE headers til streaming
+    // Sæt SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    // 5. Kald OpenAI med opdateret Prompt + Historik + Ny Besked
+    // 5. Kald OpenAI med opdateret prompt + historik + ny besked
     const stream = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -116,7 +131,7 @@ app.post('/api/chat/stream', async (req, res) => {
     res.write('data: [DONE]\n\n');
     res.end();
 
-    // 6. Gem AI'ens samlede svar i databasen bagefter
+    // 6. Gem AI'ens samlede svar i databasen
     if (fullAnswer) {
       await pool.query(
         `INSERT INTO chat_conversations (client_id, session_id, role, message) 
@@ -125,7 +140,7 @@ app.post('/api/chat/stream', async (req, res) => {
       );
     }
 
-    // 7. Baggrunds-logging til n8n (hvis konfigureret)
+    // 7. Baggrunds-logging til n8n
     if (clientConfig.n8n_chat_endpoint || clientConfig.n8n_endpoint) {
       const targetEndpoint = clientConfig.n8n_chat_endpoint || clientConfig.n8n_endpoint;
       fetch(targetEndpoint, {
