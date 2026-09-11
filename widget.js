@@ -8,11 +8,28 @@
   }
 
   try {
-    // Dynamiske variabler (trækkes direkte eller sættes til standard)
-    const brandColor = '#d4af37';
-    const logoUrl = '';
-    const titleText = 'Astraea Orakel';
-    const welcomeMsg = 'Vær hilset, søgende sjæl. Hvilke spørgsmål bærer du om dit stjernekort eller din skæbne?';
+    // 1. Hent den specifikke klients konfiguration dynamisk fra PostgreSQL via n8n
+    let config = {};
+    try {
+      const configRes = await fetch('https://n8n.unikiq.dk/webhook/get-config?client_id=' + clientId);
+      if (configRes.ok) {
+        config = await configRes.json();
+      }
+    } catch (e) {
+      console.warn('Unikiq Widget: Kunne ikke hente klient-config, bruger standardværdier.', e);
+    }
+
+    // Stop afvikling hvis klienten er markeret inaktiv i databasen
+    if (config.active === false) {
+      console.warn('Unikiq Widget: Klient er inaktiv.');
+      return;
+    }
+
+    // Dynamiske variabler med faste fallbacks ifald et felt mangler i databasen
+    const brandColor = config.brand_color || '#2563eb';
+    const logoUrl = config.logo_url || '';
+    const titleText = config.title || 'UnikIQ AI Assistent';
+    const welcomeMsg = config.welcome_msg || 'Hej! 👋 Hvad kan vi hjælpe dig med i dag?';
 
     let sessionId = localStorage.getItem('unikiq_session_' + clientId) || 'session_' + Math.random().toString(36).substring(2, 9);
     localStorage.setItem('unikiq_session_' + clientId, sessionId);
