@@ -49,12 +49,17 @@ app.post('/api/chat/stream', async (req, res) => {
     const clientConfig = clientRes.rows[0];
     const baseSystemPrompt = clientConfig.system_prompt || `Du er en imødekommende assistent for ${clientConfig.company_name || 'virksomheden'}.`;
 
-    // 2. Hent de seneste 10 beskeder fra samtalehistorikken
+    // 2. Hent de seneste 20 beskeder fra samtalehistorikken i korrekt kronologisk rækkefølge
     const historyRes = await pool.query(
       `SELECT role, message AS content 
-       FROM chat_conversations 
-       WHERE client_id = $1 AND session_id = $2 
-       ORDER BY id ASC LIMIT 10`,
+       FROM (
+         SELECT id, role, message 
+         FROM chat_conversations 
+         WHERE client_id = $1 AND session_id = $2 
+         ORDER BY id DESC 
+         LIMIT 20
+       ) sub 
+       ORDER BY id ASC`,
       [clientId, activeSessionId]
     );
     const dbHistory = historyRes.rows;
