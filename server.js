@@ -16,9 +16,16 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 app.post('/api/chat/stream', async (req, res) => {
   const clientId = req.body.clientId || req.body.client_id;
-  const { message, history = [] } = req.body;
+  const { message, sessionId } = req.body;
+
+  if (!clientId || !message) {
+    return res.status(400).json({ error: 'Mangler clientId eller message' });
+  }
+
+  const activeSessionId = sessionId || 'session_default';
 
   try {
+    // 1. Hent klientkonfiguration
     const clientRes = await pool.query(
       'SELECT * FROM chat_clients WHERE client_id = $1 AND active = true',
       [clientId]
@@ -29,19 +36,36 @@ app.post('/api/chat/stream', async (req, res) => {
     }
 
     const clientConfig = clientRes.rows[0];
+    const systemPrompt = clientConfig.system_prompt || `Du er en imødekommende assistent for ${clientConfig.company_name || 'virksomheden'}.`;
 
-    // Henter den rigtige prompt fra databasen (ellers bruges falback)
-    const systemPrompt = clientConfig.system_prompt || `Du er en imødekommende assistent for ${clientConfig.title}.`;
+    // 2. Hent de seneste 10 beskeder fra historikken for denne session
+    const historyRes = await pool.query(
+      `SELECT role, message AS content 
+       FROM chat_conversations 
+       WHERE client_id = $1 AND session_id = $2 
+       ORDER BY id ASC LIMIT 10`,
+      [clientId, activeSessionId]
+    );
+    const dbHistory = historyRes.rows;
 
+    // 3. Gem brugerens nye besked i databasen
+    await pool.query(
+      `INSERT INTO chat_conversations (client_id, session_id, role, message) 
+       VALUES ($1, $2, $3, $4)`,
+      [clientId, activeSessionId, 'user', message]
+    );
+
+    // Sæt SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
+    // 4. Kald OpenAI med System Prompt + DB-historik + Ny Besked
     const stream = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: systemPrompt },
-        ...history,
+        ...dbHistory,
         { role: 'user', content: message }
       ],
       stream: true,
@@ -60,13 +84,24 @@ app.post('/api/chat/stream', async (req, res) => {
     res.write('data: [DONE]\n\n');
     res.end();
 
-    // Logger samtalen i n8n i baggrunden efterfølgende
-    if (clientConfig.n8n_endpoint) {
-      fetch(clientConfig.n8n_endpoint, {
+    // 5. Gem AI'ens samlede svar i databasen bagefter
+    if (fullAnswer) {
+      await pool.query(
+        `INSERT INTO chat_conversations (client_id, session_id, role, message) 
+         VALUES ($1, $2, $3, $4)`,
+        [clientId, activeSessionId, 'assistant', fullAnswer]
+      );
+    }
+
+    // 6. Baggrunds-logging til n8n (hvis konfigureret)
+    if (clientConfig.n8n_chat_endpoint || clientConfig.n8n_endpoint) {
+      const targetEndpoint = clientConfig.n8n_chat_endpoint || clientConfig.n8n_endpoint;
+      fetch(targetEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           clientId,
+          sessionId: activeSessionId,
           userMessage: message,
           aiResponse: fullAnswer,
           timestamp: new Date().toISOString()
